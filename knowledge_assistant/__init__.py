@@ -1,0 +1,3 @@
+"""
+Knowledge Assistant Django Project
+"""
