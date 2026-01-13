@@ -8,70 +8,62 @@ from typing import List, Dict, Tuple
 import faiss
 from sentence_transformers import SentenceTransformer
 from django.conf import settings
-import openai
+from langchain_openai import OpenAIEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings
 
 
 class EmbeddingGenerator:
     """
-    Generate embeddings for text using OpenAI or Sentence Transformers
+    Generate embeddings for text using OpenAI or Sentence Transformers via LangChain
     """
     
     def __init__(self, use_openai: bool = True):
         self.use_openai = use_openai and bool(settings.OPENAI_API_KEY)
         
         if self.use_openai:
-            openai.api_key = settings.OPENAI_API_KEY
-            self.embedding_model = settings.EMBEDDING_MODEL
-            self.embedding_dim = 1536  # OpenAI ada-002 dimension
+            try:
+                self.embeddings = OpenAIEmbeddings(
+                    api_key=settings.OPENAI_API_KEY,
+                    model=settings.EMBEDDING_MODEL
+                )
+                self.embedding_dim = 1536  # OpenAI ada-002 dimension
+            except Exception as e:
+                print(f"OpenAI API error: {e}. Falling back to sentence-transformers.")
+                self.use_openai = False
+                self.embeddings = HuggingFaceEmbeddings(model_name='all-MiniLM-L6-v2')
+                self.embedding_dim = 384  # MiniLM dimension
         else:
-            # Fallback to sentence-transformers
-            self.model = SentenceTransformer('all-MiniLM-L6-v2')
+            # Fallback to sentence-transformers via LangChain
+            self.embeddings = HuggingFaceEmbeddings(model_name='all-MiniLM-L6-v2')
             self.embedding_dim = 384  # MiniLM dimension
     
     def generate_embedding(self, text: str) -> np.ndarray:
         """
         Generate embedding for a single text
         """
-        if self.use_openai:
-            try:
-                response = openai.embeddings.create(
-                    model=self.embedding_model,
-                    input=text
-                )
-                return np.array(response.data[0].embedding, dtype=np.float32)
-            except Exception as e:
-                print(f"OpenAI API error: {e}. Falling back to sentence-transformers.")
-                # Fallback to local model
-                if not hasattr(self, 'model'):
-                    self.model = SentenceTransformer('all-MiniLM-L6-v2')
-                return self.model.encode(text, convert_to_numpy=True).astype(np.float32)
-        else:
-            return self.model.encode(text, convert_to_numpy=True).astype(np.float32)
+        try:
+            embedding = self.embeddings.embed_query(text)
+            return np.array(embedding, dtype=np.float32)
+        except Exception as e:
+            print(f"Embedding error: {e}. Using fallback model.")
+            if not hasattr(self, 'fallback_embeddings'):
+                self.fallback_embeddings = HuggingFaceEmbeddings(model_name='all-MiniLM-L6-v2')
+            embedding = self.fallback_embeddings.embed_query(text)
+            return np.array(embedding, dtype=np.float32)
     
     def generate_embeddings_batch(self, texts: List[str]) -> np.ndarray:
         """
         Generate embeddings for multiple texts
         """
-        if self.use_openai:
-            embeddings = []
-            # Process in batches to avoid rate limits
-            batch_size = 100
-            for i in range(0, len(texts), batch_size):
-                batch = texts[i:i + batch_size]
-                try:
-                    response = openai.embeddings.create(
-                        model=self.embedding_model,
-                        input=batch
-                    )
-                    batch_embeddings = [item.embedding for item in response.data]
-                    embeddings.extend(batch_embeddings)
-                except Exception as e:
-                    print(f"OpenAI batch error: {e}. Processing individually.")
-                    for text in batch:
-                        embeddings.append(self.generate_embedding(text))
+        try:
+            embeddings = self.embeddings.embed_documents(texts)
             return np.array(embeddings, dtype=np.float32)
-        else:
-            return self.model.encode(texts, convert_to_numpy=True, show_progress_bar=True).astype(np.float32)
+        except Exception as e:
+            print(f"Batch embedding error: {e}. Processing individually.")
+            embeddings = []
+            for text in texts:
+                embeddings.append(self.generate_embedding(text))
+            return np.array(embeddings, dtype=np.float32)
 
 
 class VectorDatabase:
