@@ -120,6 +120,9 @@ OPENAI_API_KEY = config('OPENAI_API_KEY', default='')
 OPENAI_MODEL = config('OPENAI_MODEL', default='gpt-3.5-turbo')
 EMBEDDING_MODEL = config('EMBEDDING_MODEL', default='text-embedding-ada-002')
 
+# API Access Control
+API_TOKEN = config('API_TOKEN', default='')  # Optional static token for simple auth
+
 # Vector Database Settings
 VECTOR_DB_PATH = BASE_DIR / config('VECTOR_DB_PATH', default='data/vector_store')
 CHUNK_SIZE = config('CHUNK_SIZE', default=500, cast=int)

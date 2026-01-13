@@ -50,6 +50,32 @@ class DocumentUploadSerializer(serializers.Serializer):
         return value
 
 
+class BulkDocumentUploadSerializer(serializers.Serializer):
+    """
+    Serializer for uploading multiple documents at once
+    """
+    files = serializers.ListField(
+        child=serializers.FileField(), allow_empty=False
+    )
+    description = serializers.CharField(required=False, allow_blank=True)
+
+    def validate_files(self, value):
+        allowed_extensions = ['.pdf', '.md', '.txt', '.docx']
+        max_size = 10 * 1024 * 1024  # 10MB
+
+        for file_obj in value:
+            file_ext = file_obj.name.split('.')[-1].lower()
+            if f'.{file_ext}' not in allowed_extensions:
+                raise serializers.ValidationError(
+                    f"Unsupported file type {file_obj.name}. Allowed: {', '.join(allowed_extensions)}"
+                )
+            if file_obj.size > max_size:
+                raise serializers.ValidationError(
+                    f"File {file_obj.name} exceeds maximum allowed size of 10MB"
+                )
+        return value
+
+
 class QuestionSerializer(serializers.Serializer):
     """
     Serializer for question input

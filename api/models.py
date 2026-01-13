@@ -73,6 +73,10 @@ class QueryHistory(models.Model):
     
     # Caching
     cache_hit = models.BooleanField(default=False)
+
+    # Access metadata
+    user_token = models.CharField(max_length=255, null=True, blank=True)
+    client_ip = models.GenericIPAddressField(null=True, blank=True)
     
     created_at = models.DateTimeField(auto_now_add=True)
     
