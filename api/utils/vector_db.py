@@ -166,6 +166,16 @@ class VectorDatabase:
                 })
         
         return results
+
+    def add_multiple_documents(self, documents_chunks: List[List[Dict]]) -> None:
+        """
+        Add multiple documents' chunks in one call
+        documents_chunks: list where each item is list of chunks for a document
+        """
+        flat_chunks = []
+        for doc_chunks in documents_chunks:
+            flat_chunks.extend(doc_chunks)
+        self.add_documents(flat_chunks)
     
     def remove_document_chunks(self, document_id: int) -> None:
         """

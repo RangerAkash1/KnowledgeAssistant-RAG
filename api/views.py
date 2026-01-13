@@ -13,6 +13,7 @@ from .models import Document, DocumentChunk, QueryHistory
 from .serializers import (
     DocumentSerializer,
     DocumentUploadSerializer,
+    BulkDocumentUploadSerializer,
     QuestionSerializer,
     AnswerSerializer,
     QueryHistorySerializer
@@ -24,6 +25,21 @@ from .utils.rag_system import RAGSystem
 
 # Initialize RAG system
 rag_system = RAGSystem(vector_db)
+
+
+def _is_authorized(request):
+    """
+    Simple token-based access control. If API_TOKEN is set in settings,
+    require header Authorization: Token <API_TOKEN>
+    """
+    token = getattr(settings, 'API_TOKEN', '')
+    if not token:
+        return True  # token not configured, allow all
+    auth_header = request.headers.get('Authorization') or ''
+    if auth_header.startswith('Token '):
+        provided = auth_header.replace('Token ', '', 1).strip()
+        return provided == token
+    return False
 
 
 class DocumentViewSet(viewsets.ModelViewSet):
@@ -39,6 +55,8 @@ class DocumentViewSet(viewsets.ModelViewSet):
         Upload and process a document
         POST /api/documents/upload/
         """
+        if not _is_authorized(request):
+            return Response({'detail': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
         serializer = DocumentUploadSerializer(data=request.data)
         
         if not serializer.is_valid():
@@ -126,6 +144,81 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 {'error': f'Failed to process document: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+    @action(detail=False, methods=['post'], parser_classes=[MultiPartParser, FormParser])
+    def upload_bulk(self, request):
+        """
+        Upload and process multiple documents in one request
+        POST /api/documents/upload_bulk/
+        """
+        if not _is_authorized(request):
+            return Response({'detail': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
+
+        serializer = BulkDocumentUploadSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        files = serializer.validated_data['files']
+        description = serializer.validated_data.get('description', '')
+        results = []
+
+        for file_obj in files:
+            title = file_obj.name
+            file_ext = file_obj.name.split('.')[-1].lower()
+
+            document = Document.objects.create(
+                title=title,
+                description=description,
+                file=file_obj,
+                file_type=file_ext,
+                file_size=file_obj.size,
+                status='processing'
+            )
+
+            try:
+                processor = DocumentProcessor()
+                pages_content = processor.process_document(document.file.path, file_ext)
+
+                chunker = TextChunker(
+                    chunk_size=settings.CHUNK_SIZE,
+                    chunk_overlap=settings.CHUNK_OVERLAP
+                )
+                chunks = chunker.chunk_document(pages_content)
+
+                chunk_objects = []
+                for chunk_data in chunks:
+                    chunk_obj = DocumentChunk.objects.create(
+                        document=document,
+                        content=chunk_data['content'],
+                        chunk_index=chunk_data['chunk_index'],
+                        page_number=chunk_data['page_number']
+                    )
+                    chunk_objects.append(chunk_obj)
+
+                vector_chunks = [
+                    {
+                        'id': chunk.id,
+                        'content': chunk.content,
+                        'document_id': document.id,
+                        'document_title': document.title,
+                        'page_number': chunk.page_number,
+                        'chunk_index': chunk.chunk_index
+                    }
+                    for chunk in chunk_objects
+                ]
+                vector_db.add_documents(vector_chunks)
+
+                document.status = 'completed'
+                document.num_chunks = len(chunks)
+                document.save()
+
+                results.append({'document': DocumentSerializer(document).data, 'status': 'ok'})
+            except Exception as e:
+                document.status = 'failed'
+                document.save()
+                results.append({'document': DocumentSerializer(document).data, 'status': 'failed', 'error': str(e)})
+
+        return Response({'results': results}, status=status.HTTP_201_CREATED)
     
     def destroy(self, request, *args, **kwargs):
         """
@@ -191,7 +284,9 @@ def ask_question(request):
             retrieved_chunks_count=result['retrieved_chunks'],
             processing_time=result['processing_time'],
             confidence_score=result['confidence'],
-            cache_hit=result['cached']
+            cache_hit=result['cached'],
+            user_token=request.headers.get('Authorization'),
+            client_ip=request.META.get('REMOTE_ADDR')
         )
         
         # Prepare response
